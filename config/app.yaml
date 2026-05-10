@@ -1,0 +1,57 @@
+﻿google:
+  spreadsheet_id: "1egAm84p9U0jdzfDq6NS3N2tXVz3W0KlUv8Nyo2rEcow"
+  credentials_file: "secrets/google-service-account.json"
+
+sheets:
+  required:
+    read: "읽은 책"
+    reading: "읽는 중"
+    wishlist: "읽을 예정"
+  optional:
+    settings: "추천 설정"
+    feedback: "추천 피드백"
+    recommendations: "추천 결과"
+    run_log: "실행 로그"
+
+yplib:
+  base_url: "https://www.yplib.go.kr"
+  search_endpoint: "/api/search"
+  referer: "https://www.yplib.go.kr/searchResult"
+  request_delay_seconds: 1.0
+  timeout_seconds: 20
+  verify_ssl: false
+  default_payload:
+    searchCondition: "ALL"
+    manageCode: "ALL"
+    display: 20
+    page: 1
+  max_pages_per_query: 2
+  min_candidate_pool: 40
+  max_queries: 24
+  exclude_pub_form_codes: ["EB"]
+  exclude_media_keywords: ["전자책", "오디오북"]
+  exclude_candidate_keywords:
+    - "만화"
+    - "마법천자문"
+    - "손오공"
+    - "어린이"
+    - "아동"
+    - "초등"
+    - "교실"
+    - "메뉴판"
+    - "반려 요괴"
+    - "구마구마"
+    - "공주"
+    - "학습"
+    - "태교"
+
+recommendation:
+  target_count: 20
+  high_rating_threshold: 4.0
+  min_acquisition_year: 2020
+  min_score: 70
+  new_arrival_days: 90
+  preferred_libraries: ["양평", "용문", "양서", "지평", "청운", "강하", "개군", "서종", "단월", "옥천"]
+  max_per_author: 1
+
+
