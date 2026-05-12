@@ -30,6 +30,18 @@ python -m src.main --config config/app.yaml --mode update-sheets --update-plan o
 python -m src.main --config config/app.yaml --mode radar --output output
 ```
 
+알림 정책은 세 가지입니다.
+
+```bash
+python -m src.main --config config/app.yaml --mode radar --notify-policy immediate --output output
+python -m src.main --config config/app.yaml --mode radar --notify-policy silent --output output
+python -m src.main --config config/app.yaml --mode radar --notify-policy digest --output output
+```
+
+- `immediate`: 이번 실행에서 강한 후보가 있으면 바로 알림을 보냅니다.
+- `silent`: 후보를 찾고 상태에 누적하지만 알림은 보내지 않습니다.
+- `digest`: 누적된 강한 후보와 이번 실행 후보를 묶어 알림을 보냅니다.
+
 샘플 데이터로 실행:
 
 ```bash
@@ -49,6 +61,7 @@ python -m src.main --config config/app.yaml --mode radar --snapshot tests/fixtur
 - `radar_telegram_result.json`
 
 상태 파일은 기본적으로 `output/radar/radar_state.json`에 저장됩니다. 같은 책을 너무 자주 보내지 않도록 `last_alerted_at`과 `alert_count`를 사용합니다.
+`silent` 실행에서 발견한 강한 후보는 `pending_alerts`에 누적되고, `digest` 실행이 성공적으로 알림을 보내면 정리됩니다.
 
 ## Provider 설정
 
@@ -141,7 +154,12 @@ python scripts/send_test_email.py
 
 ## GitHub Actions 예약 실행
 
-`.github/workflows/book-radar.yml`은 매일 07:00 KST에 실행됩니다. 저장소 Secrets에 다음 값을 넣습니다.
+GitHub Actions는 두 단계로 동작합니다.
+
+- `Book Radar Watch`: 3시간마다 실행, 후보를 찾고 상태에 누적, 알림 없음
+- `Book Radar Digest`: 매일 07:00 KST 실행, 누적된 강한 후보를 Telegram으로 발송
+
+저장소 Secrets에 다음 값을 넣습니다.
 
 - `GOOGLE_SERVICE_ACCOUNT_JSON`
 - `TELEGRAM_BOT_TOKEN`
@@ -149,7 +167,7 @@ python scripts/send_test_email.py
 
 이메일도 같이 쓰려면 SMTP Secrets도 추가하고 workflow의 `BOOK_RADAR_EMAIL_ENABLED`를 `"true"`로 바꾸면 됩니다.
 
-workflow는 결과를 artifact로 업로드하며, `output`을 저장소에 자동 커밋하지 않습니다. 반복 알림 억제와 상태 비교에 필요한 `output/radar/radar_state.json`은 GitHub Actions cache로 복원/저장합니다.
+workflow는 결과를 artifact로 업로드하며, `output`을 저장소에 자동 커밋하지 않습니다. 반복 알림 억제, 누적 digest, 상태 비교에 필요한 `output/radar/radar_state.json`은 GitHub Actions cache로 복원/저장합니다.
 
 ## 테스트
 

@@ -13,14 +13,20 @@ from .utils import ensure_dir, make_run_id, read_json, write_json
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="양평군도서관 Google Sheets 독서 추천 에이전트")
+    parser = argparse.ArgumentParser(description="Book Radar and Yangpyeong Library portfolio pipeline")
     parser.add_argument("--config", default="config/app.yaml")
     parser.add_argument("--mode", choices=["check-setup", "recommend", "update-sheets", "radar"], required=True)
     parser.add_argument("--output", default="output")
-    parser.add_argument("--snapshot", help="Google Sheets 대신 로컬 portfolio_snapshot.json을 사용합니다.")
-    parser.add_argument("--update-plan", help="sheets_update_plan.json 경로")
-    parser.add_argument("--approved", action="store_true", help="사용자가 변경표를 승인했음을 표시합니다.")
-    parser.add_argument("--commit", action="store_true", help="승인된 계획을 실제 Google Sheets에 씁니다.")
+    parser.add_argument("--snapshot", help="Use a local portfolio_snapshot.json instead of Google Sheets.")
+    parser.add_argument(
+        "--notify-policy",
+        choices=["immediate", "silent", "digest"],
+        default="immediate",
+        help="radar notification policy: immediate sends now, silent only records state, digest sends accumulated alerts.",
+    )
+    parser.add_argument("--update-plan", help="Path to sheets_update_plan.json")
+    parser.add_argument("--approved", action="store_true", help="Mark a Google Sheets update plan as approved.")
+    parser.add_argument("--commit", action="store_true", help="Actually write approved updates to Google Sheets.")
     return parser
 
 
@@ -47,7 +53,12 @@ def main() -> None:
         return
 
     if args.mode == "radar":
-        result = run_radar(config, output_root, Path(args.snapshot) if args.snapshot else None)
+        result = run_radar(
+            config,
+            output_root,
+            Path(args.snapshot) if args.snapshot else None,
+            notify_policy=args.notify_policy,
+        )
         print(f"Book Radar report: {result['report']}")
         print(f"Book Radar alerts: {result['alerts']}")
         print(f"Book Radar alert count: {result['alert_count']}")
@@ -55,7 +66,7 @@ def main() -> None:
 
     if args.mode == "update-sheets":
         if not args.update_plan:
-            raise SystemExit("--update-plan이 필요합니다.")
+            raise SystemExit("--update-plan is required")
         plan = read_json(Path(args.update_plan))
         run_id = plan.get("run_id") or make_run_id()
         run_dir = ensure_dir(output_root / run_id)

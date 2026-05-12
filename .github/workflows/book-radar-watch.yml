@@ -1,12 +1,12 @@
-name: Book Radar Digest
+name: Book Radar Watch
 
 on:
   schedule:
-    - cron: "0 22 * * *" # 07:00 KST daily digest.
+    - cron: "0 */3 * * *" # Every 3 hours. Collects candidates silently.
   workflow_dispatch:
 
 jobs:
-  radar:
+  radar-watch:
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -38,31 +38,18 @@ jobs:
           test -n "$GOOGLE_SERVICE_ACCOUNT_JSON"
           printf '%s' "$GOOGLE_SERVICE_ACCOUNT_JSON" > secrets/google-service-account.json
 
-      - name: Run Book Radar digest
+      - name: Run Book Radar watch
         env:
           BOOK_RADAR_EMAIL_ENABLED: "false"
-          BOOK_RADAR_TELEGRAM_ENABLED: "true"
-          SMTP_HOST: ${{ secrets.SMTP_HOST }}
-          SMTP_PORT: ${{ secrets.SMTP_PORT }}
-          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
-          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
-          MAIL_FROM: ${{ secrets.MAIL_FROM }}
-          MAIL_TO: ${{ secrets.MAIL_TO }}
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python -m src.main --config config/app.yaml --mode radar --notify-policy digest --output output
+          BOOK_RADAR_TELEGRAM_ENABLED: "false"
+        run: python -m src.main --config config/app.yaml --mode radar --notify-policy silent --output output
 
-      - name: Upload radar artifacts
+      - name: Upload watch artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: book-radar-output
+          name: book-radar-watch-output
           path: |
-            output/**/radar_candidates.json
-            output/**/radar_scored_candidates.json
             output/**/radar_changes.json
             output/**/radar_report.md
-            output/**/radar_alerts.md
             output/**/radar_state_after.json
             output/**/radar_run_summary.json
-            output/**/radar_email_result.json
-            output/**/radar_telegram_result.json

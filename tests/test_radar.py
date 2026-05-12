@@ -4,7 +4,7 @@ from datetime import timedelta
 from pathlib import Path
 
 from src.portfolio import build_taste_profile, normalize_portfolio
-from src.radar import compare_radar_state, effective_radar_config, merge_candidates, run_radar
+from src.radar import compare_radar_state, effective_radar_config, finalize_alert_state, merge_candidates, run_radar
 from src.radar_scoring import build_radar_taste_dna, score_radar_candidates
 from src.utils import now_kst, read_json
 from src.notify import chunk_text, is_email_enabled, is_telegram_enabled
@@ -68,6 +68,7 @@ def test_new_strong_candidate_detected(tmp_path: Path) -> None:
     changes, _state = compare_radar_state([scored_candidate(tmp_path)], {"version": 1, "items": {}}, config, now_kst())
     assert len(changes["new_strong"]) == 1
     assert len(changes["alert_items"]) == 1
+    assert len(changes["pending_alert_items"]) == 1
 
 
 def test_repeat_alert_suppressed(tmp_path: Path) -> None:
@@ -88,6 +89,38 @@ def test_repeat_alert_suppressed(tmp_path: Path) -> None:
     }
     changes, _state = compare_radar_state([scored_candidate(tmp_path)], previous, config, now)
     assert changes["alert_items"] == []
+
+
+def test_silent_watch_accumulates_pending_without_alerting(tmp_path: Path) -> None:
+    config = effective_radar_config(base_config(tmp_path))
+    changes, state = compare_radar_state(
+        [scored_candidate(tmp_path)],
+        {"version": 1, "items": {}},
+        config,
+        now_kst(),
+        notify_policy="silent",
+    )
+    assert changes["alert_items"] == []
+    assert len(changes["pending_alert_items"]) == 1
+    assert "newbook|writer" in state["pending_alerts"]
+    assert not state["items"]["newbook|writer"].get("last_alerted_at")
+
+
+def test_digest_sends_pending_and_finalize_clears_it(tmp_path: Path) -> None:
+    config = effective_radar_config(base_config(tmp_path))
+    now = now_kst()
+    _changes, watch_state = compare_radar_state(
+        [scored_candidate(tmp_path)],
+        {"version": 1, "items": {}},
+        config,
+        now,
+        notify_policy="silent",
+    )
+    digest_changes, digest_state = compare_radar_state([], watch_state, config, now + timedelta(hours=3), notify_policy="digest")
+    assert len(digest_changes["alert_items"]) == 1
+    finalized = finalize_alert_state(digest_state, digest_changes["alert_items"], now + timedelta(hours=3))
+    assert finalized["pending_alerts"] == {}
+    assert finalized["items"]["newbook|writer"]["alert_count"] == 1
 
 
 def test_availability_change_detected(tmp_path: Path) -> None:

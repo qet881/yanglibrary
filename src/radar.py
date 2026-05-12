@@ -17,7 +17,14 @@ from .utils import ensure_dir, identity_key, make_run_id, now_kst, primary_autho
 from .yplib import matches_existing
 
 
-def run_radar(config: dict[str, Any], output_root: Path, snapshot_path: Path | None = None) -> dict[str, Any]:
+def run_radar(
+    config: dict[str, Any],
+    output_root: Path,
+    snapshot_path: Path | None = None,
+    notify_policy: str = "immediate",
+) -> dict[str, Any]:
+    if notify_policy not in {"immediate", "silent", "digest"}:
+        raise ValueError(f"unsupported notify_policy: {notify_policy}")
     run_id = make_run_id()
     run_dir = ensure_dir(output_root / run_id)
     radar_config = effective_radar_config(config)
@@ -56,7 +63,8 @@ def run_radar(config: dict[str, Any], output_root: Path, snapshot_path: Path | N
 
     state_path = Path(radar_config.get("radar", {}).get("state_file", output_root / "radar" / "radar_state.json"))
     previous_state = load_radar_state(state_path)
-    changes, next_state = compare_radar_state(scored, previous_state, radar_config, now_kst())
+    now = now_kst()
+    changes, next_state = compare_radar_state(scored, previous_state, radar_config, now, notify_policy=notify_policy)
     write_json(run_dir / "radar_changes.json", changes)
     write_json(run_dir / "radar_state_after.json", next_state)
     write_json(state_path, next_state)
@@ -66,12 +74,26 @@ def run_radar(config: dict[str, Any], output_root: Path, snapshot_path: Path | N
     write_radar_report(report_path, run_id, provider_results, candidates, scored, changes, email_sent=False)
     write_radar_alerts(alerts_path, changes)
 
+    should_notify = notify_policy in {"immediate", "digest"} and bool(changes.get("alert_items"))
     email_enabled = is_email_enabled(radar_config.get("notify", {}).get("email", {}))
-    email_result = send_email_report(radar_config, alerts_path, run_id) if changes.get("alert_items") else {"enabled": email_enabled, "sent": False, "reason": "no alert items"}
+    email_result = (
+        send_email_report(radar_config, alerts_path, run_id)
+        if should_notify
+        else {"enabled": email_enabled, "sent": False, "reason": "notification suppressed" if notify_policy == "silent" else "no alert items"}
+    )
     write_json(run_dir / "radar_email_result.json", email_result)
     telegram_enabled = is_telegram_enabled(radar_config.get("notify", {}).get("telegram", {}))
-    telegram_result = send_telegram_report(radar_config, alerts_path, run_id) if changes.get("alert_items") else {"enabled": telegram_enabled, "sent": False, "reason": "no alert items"}
+    telegram_result = (
+        send_telegram_report(radar_config, alerts_path, run_id)
+        if should_notify
+        else {"enabled": telegram_enabled, "sent": False, "reason": "notification suppressed" if notify_policy == "silent" else "no alert items"}
+    )
     write_json(run_dir / "radar_telegram_result.json", telegram_result)
+    notification_sent = bool(email_result.get("sent") or telegram_result.get("sent"))
+    if notification_sent:
+        next_state = finalize_alert_state(next_state, changes.get("alert_items", []), now)
+        write_json(run_dir / "radar_state_after.json", next_state)
+        write_json(state_path, next_state)
     write_radar_report(report_path, run_id, provider_results, candidates, scored, changes, email_sent=bool(email_result.get("sent")))
 
     summary = {
@@ -81,6 +103,7 @@ def run_radar(config: dict[str, Any], output_root: Path, snapshot_path: Path | N
         "millie_candidate_count": len(provider_results.get("millie", empty_provider()).candidates),
         "deduped_candidate_count": len(candidates),
         "alert_count": len(changes.get("alert_items", [])),
+        "notify_policy": notify_policy,
         "email": email_result,
         "telegram": telegram_result,
         "report": str(report_path),
@@ -226,9 +249,12 @@ def compare_radar_state(
     previous_state: dict[str, Any],
     config: dict[str, Any],
     now: datetime,
+    notify_policy: str = "immediate",
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     previous_items = previous_state.get("items", {})
     next_items = dict(previous_items)
+    previous_pending = previous_state.get("pending_alerts", {})
+    next_pending = dict(previous_pending)
     changes = {
         "new_strong": [],
         "availability_changed": [],
@@ -236,12 +262,20 @@ def compare_radar_state(
         "score_confidence_rise": [],
         "watchlist": [],
         "alert_items": [],
+        "pending_alert_items": [],
     }
     watch_threshold = int(config.get("radar", {}).get("watch_score_threshold", 80))
     max_alerts = int(config.get("radar", {}).get("max_alerts_per_run", 5))
     email_max_items = int(config.get("notify", {}).get("email", {}).get("max_items", max_alerts) or max_alerts)
-    max_alerts = min(max_alerts, email_max_items)
+    telegram_max_items = int(config.get("notify", {}).get("telegram", {}).get("max_items", max_alerts) or max_alerts)
+    max_alerts = min(max_alerts, email_max_items, telegram_max_items)
     suppress_days = int(config.get("radar", {}).get("suppress_repeat_days", 14))
+
+    if notify_policy == "digest":
+        for pending in previous_pending.values():
+            item = pending_to_alert_item(pending)
+            if item and len(changes["alert_items"]) < max_alerts:
+                changes["alert_items"].append(item)
 
     for item in scored:
         key = item.get("identity_key")
@@ -270,15 +304,84 @@ def compare_radar_state(
         if item.get("score", 0) >= watch_threshold and not item.get("alert_eligible"):
             changes["watchlist"].append(item)
 
-        if alert_reasons and should_send_alert(previous, now, suppress_days) and len(changes["alert_items"]) < max_alerts:
+        if alert_reasons and should_send_alert(previous, now, suppress_days):
             alert_item = {**item, "alert_reasons": alert_reasons}
-            changes["alert_items"].append(alert_item)
-            state_item["last_alerted_at"] = now.isoformat()
-            state_item["alert_count"] = int((previous or {}).get("alert_count", 0)) + 1
+            next_pending[key] = pending_alert_entry(alert_item, next_pending.get(key), now)
+            changes["pending_alert_items"].append(alert_item)
+            if notify_policy in {"immediate", "digest"} and not has_alert_item(changes["alert_items"], key) and len(changes["alert_items"]) < max_alerts:
+                changes["alert_items"].append(alert_item)
 
         next_items[key] = state_item
 
-    return changes, {"version": 1, "updated_at": now.isoformat(), "items": next_items}
+    return changes, {"version": 1, "updated_at": now.isoformat(), "items": next_items, "pending_alerts": next_pending}
+
+
+def pending_alert_entry(item: dict[str, Any], previous: dict[str, Any] | None, now: datetime) -> dict[str, Any]:
+    reasons = sorted(set((previous or {}).get("alert_reasons", []) + item.get("alert_reasons", [])))
+    return {
+        "identity_key": item.get("identity_key"),
+        "first_detected_at": (previous or {}).get("first_detected_at") or now.isoformat(),
+        "last_detected_at": now.isoformat(),
+        "alert_reasons": reasons,
+        "item": compact_alert_item(item, reasons),
+    }
+
+
+def compact_alert_item(item: dict[str, Any], reasons: list[str]) -> dict[str, Any]:
+    keep = [
+        "identity_key",
+        "title",
+        "author",
+        "source",
+        "source_label",
+        "availability",
+        "availability_summary",
+        "grade",
+        "score",
+        "confidence",
+        "recommendation_reason",
+        "dna_connection",
+        "life_book_connection",
+        "similar_high_books",
+        "avoidance_distance",
+        "risk_factors",
+        "reading_mode",
+        "thirty_page_test",
+        "why_now",
+        "source_url",
+    ]
+    compact = {key: item.get(key) for key in keep if key in item}
+    compact["alert_reasons"] = reasons
+    return compact
+
+
+def pending_to_alert_item(pending: dict[str, Any]) -> dict[str, Any] | None:
+    item = pending.get("item")
+    if not isinstance(item, dict):
+        return None
+    reasons = pending.get("alert_reasons") or item.get("alert_reasons") or []
+    return {**item, "alert_reasons": reasons, "pending_since": pending.get("first_detected_at")}
+
+
+def has_alert_item(items: list[dict[str, Any]], key: str) -> bool:
+    return any(item.get("identity_key") == key for item in items)
+
+
+def finalize_alert_state(state: dict[str, Any], alert_items: list[dict[str, Any]], now: datetime) -> dict[str, Any]:
+    items = state.get("items", {})
+    pending = dict(state.get("pending_alerts", {}))
+    for alert in alert_items:
+        key = alert.get("identity_key")
+        if not key:
+            continue
+        state_item = items.get(key)
+        if state_item:
+            state_item["last_alerted_at"] = now.isoformat()
+            state_item["alert_count"] = int(state_item.get("alert_count", 0) or 0) + 1
+        pending.pop(key, None)
+    state["pending_alerts"] = pending
+    state["updated_at"] = now.isoformat()
+    return state
 
 
 def build_state_item(item: dict[str, Any], previous: dict[str, Any] | None, availability: str, now: datetime) -> dict[str, Any]:

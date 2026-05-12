@@ -87,4 +87,5 @@ notify:
   telegram:
     enabled: false
     subject_prefix: "[Book Radar]"
+    max_items: 5
     max_chars_per_message: 3500
