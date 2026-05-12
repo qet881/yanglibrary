@@ -1,0 +1,68 @@
+name: Book Radar
+
+on:
+  schedule:
+    - cron: "0 22 * * *" # 07:00 KST daily. Add another cron for twice-daily runs if needed.
+  workflow_dispatch:
+
+jobs:
+  radar:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Restore radar state cache
+        uses: actions/cache@v4
+        with:
+          path: output/radar
+          key: book-radar-state-${{ github.run_id }}
+          restore-keys: |
+            book-radar-state-
+
+      - name: Restore Google credentials
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+        run: |
+          mkdir -p secrets
+          test -n "$GOOGLE_SERVICE_ACCOUNT_JSON"
+          printf '%s' "$GOOGLE_SERVICE_ACCOUNT_JSON" > secrets/google-service-account.json
+
+      - name: Run Book Radar
+        env:
+          BOOK_RADAR_EMAIL_ENABLED: "false"
+          BOOK_RADAR_TELEGRAM_ENABLED: "true"
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          MAIL_FROM: ${{ secrets.MAIL_FROM }}
+          MAIL_TO: ${{ secrets.MAIL_TO }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python -m src.main --config config/app.yaml --mode radar --output output
+
+      - name: Upload radar artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: book-radar-output
+          path: |
+            output/**/radar_candidates.json
+            output/**/radar_scored_candidates.json
+            output/**/radar_changes.json
+            output/**/radar_report.md
+            output/**/radar_alerts.md
+            output/**/radar_state_after.json
+            output/**/radar_run_summary.json
+            output/**/radar_email_result.json
+            output/**/radar_telegram_result.json

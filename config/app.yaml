@@ -27,9 +27,9 @@ yplib:
     page: 1
   max_pages_per_query: 2
   min_candidate_pool: 40
-  max_queries: 24
+  max_queries: 36
   exclude_pub_form_codes: ["EB"]
-  exclude_media_keywords: ["전자책", "오디오북"]
+  exclude_media_keywords: ["전자책", "오디오북", "멀티미디어"]
   exclude_candidate_keywords:
     - "만화"
     - "마법천자문"
@@ -48,10 +48,43 @@ yplib:
 recommendation:
   target_count: 20
   high_rating_threshold: 4.0
-  min_acquisition_year: 2020
-  min_score: 70
+  min_acquisition_year: 0
+  min_score: 60
   new_arrival_days: 90
   preferred_libraries: ["양평", "용문", "양서", "지평", "청운", "강하", "개군", "서종", "단월", "옥천"]
-  max_per_author: 1
+  max_per_author: 2
 
+radar:
+  enabled: true
+  state_file: "output/radar/radar_state.json"
+  alert_score_threshold: 90
+  watch_score_threshold: 80
+  min_alert_confidence: "medium"
+  max_alerts_per_run: 5
+  suppress_repeat_days: 14
+  report_dir: "output"
+  disable_freshness_filter: true
 
+providers:
+  yplib:
+    enabled: true
+    provider: "auto"  # auto | api | crawler
+  millie:
+    enabled: true
+    provider: "manual_or_public"
+    manual_input_file: "data/millie_watchlist.csv"
+    public_search_url: "https://live-api.millie.co.kr/v3/search/content"
+    referer_base: "https://www.millie.co.kr/v4/library/search"
+    max_queries: 12
+    limit_per_query: 10
+    request_delay_seconds: 1.0
+
+notify:
+  email:
+    enabled: false
+    subject_prefix: "[Book Radar]"
+    max_items: 5
+  telegram:
+    enabled: false
+    subject_prefix: "[Book Radar]"
+    max_chars_per_message: 3500

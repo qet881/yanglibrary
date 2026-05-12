@@ -4,7 +4,9 @@ import argparse
 from pathlib import Path
 
 from .config import load_config
+from .env import load_env_file
 from .pipeline import run_recommend
+from .radar import run_radar
 from .sheets import check_setup
 from .update_plan import execute_update_plan, write_approval_preview
 from .utils import ensure_dir, make_run_id, read_json, write_json
@@ -13,7 +15,7 @@ from .utils import ensure_dir, make_run_id, read_json, write_json
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="양평군도서관 Google Sheets 독서 추천 에이전트")
     parser.add_argument("--config", default="config/app.yaml")
-    parser.add_argument("--mode", choices=["check-setup", "recommend", "update-sheets"], required=True)
+    parser.add_argument("--mode", choices=["check-setup", "recommend", "update-sheets", "radar"], required=True)
     parser.add_argument("--output", default="output")
     parser.add_argument("--snapshot", help="Google Sheets 대신 로컬 portfolio_snapshot.json을 사용합니다.")
     parser.add_argument("--update-plan", help="sheets_update_plan.json 경로")
@@ -23,6 +25,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    load_env_file()
     args = build_parser().parse_args()
     config = load_config(args.config)
     output_root = ensure_dir(Path(args.output))
@@ -43,6 +46,13 @@ def main() -> None:
         print(f"validation: {result['validation_status']} ({result['validation_report']})")
         return
 
+    if args.mode == "radar":
+        result = run_radar(config, output_root, Path(args.snapshot) if args.snapshot else None)
+        print(f"Book Radar report: {result['report']}")
+        print(f"Book Radar alerts: {result['alerts']}")
+        print(f"Book Radar alert count: {result['alert_count']}")
+        return
+
     if args.mode == "update-sheets":
         if not args.update_plan:
             raise SystemExit("--update-plan이 필요합니다.")
@@ -58,4 +68,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
