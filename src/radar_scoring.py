@@ -85,6 +85,7 @@ def build_radar_taste_dna(portfolio: dict[str, Any], taste_profile: dict[str, An
         },
         "axis_examples": examples,
         "favorite_authors": taste_profile.get("favorite_authors", []),
+        "read_author_keys": taste_profile.get("read_author_keys", []),
         "positive_patterns": taste_profile.get("positive_patterns", []),
         "negative_patterns": taste_profile.get("negative_patterns", []),
         "note_keywords": taste_profile.get("note_keywords", []),
@@ -93,11 +94,7 @@ def build_radar_taste_dna(portfolio: dict[str, Any], taste_profile: dict[str, An
 
 
 def score_radar_candidates(candidates: list[dict[str, Any]], dna: dict[str, Any], config: dict[str, Any]) -> list[dict[str, Any]]:
-    favorite_authors = {
-        primary_author_key(author): int(count)
-        for author, count in dna.get("favorite_authors", [])
-        if primary_author_key(author)
-    }
+    read_author_keys = set(dna.get("read_author_keys", []))
     high_books = dna.get("high_rating_books", [])
     life_books = dna.get("life_books", [])
     cutoff_books = dna.get("cutoff_books", [])
@@ -109,39 +106,40 @@ def score_radar_candidates(candidates: list[dict[str, Any]], dna: dict[str, Any]
         context = candidate_context(candidate)
         normalized_context = normalize_text(context)
         author_key = candidate.get("author_key") or primary_author_key(candidate.get("author", ""))
-        author_signal = min(18, 6 + favorite_authors.get(author_key, 0) * 4) if favorite_authors.get(author_key) else 0
+        unread_author = bool(author_key and author_key not in read_author_keys)
         axis_hits = term_hits(context, positive_terms)
         trap_hits = term_hits(context, negative_terms)
         similar_books = similar_high_books(candidate, high_books)
         life_connection = similar_high_books(candidate, life_books, limit=2)
         cutoff_distance = cutoff_distance_label(candidate, cutoff_books, trap_hits)
         availability_bonus = 6 if is_available(candidate) else 0
-        millie_bonus = 8 if candidate.get("source") == "millie" and candidate.get("availability") == "확인됨" else 0
         direct_life_bonus = 14 if life_connection else 0
         high_similarity_bonus = min(24, sum(book.get("dna_weight", 0) for book in similar_books[:3]) * 3)
         positive_pattern_signal = min(28, sum(weight for _term, weight in axis_hits[:8]))
         negative_penalty = min(30, sum(weight for _term, weight in trap_hits[:8]))
+        has_taste_evidence = bool(axis_hits or similar_books or life_connection)
+        discovery_signal = 10 if unread_author and has_taste_evidence else 0
+        known_author_penalty = 18 if author_key and author_key in read_author_keys else 0
         evidence_markers = [
-            author_signal > 0,
+            discovery_signal > 0,
             bool(axis_hits),
             bool(similar_books),
             bool(life_connection),
             is_available(candidate),
-            candidate.get("source") == "millie" and candidate.get("availability") == "확인됨",
         ]
         evidence_count = sum(1 for marker in evidence_markers if marker)
-        keyword_only = is_keyword_only(axis_hits, similar_books, author_signal, normalized_context)
-        strong_basis = has_strong_basis(author_signal, positive_pattern_signal, high_similarity_bonus, direct_life_bonus)
+        keyword_only = is_keyword_only(axis_hits, similar_books, normalized_context)
+        strong_basis = has_strong_basis(positive_pattern_signal, high_similarity_bonus, direct_life_bonus)
 
         raw_score = (
             46
-            + author_signal
+            + discovery_signal
             + positive_pattern_signal
             + high_similarity_bonus
             + direct_life_bonus
             + availability_bonus
-            + millie_bonus
             - negative_penalty
+            - known_author_penalty
         )
         if keyword_only:
             raw_score = min(raw_score, 74)
@@ -158,7 +156,7 @@ def score_radar_candidates(candidates: list[dict[str, Any]], dna: dict[str, Any]
                 "grade": grade,
                 "confidence": confidence,
                 "confidence_rank": confidence_rank(confidence),
-                "recommendation_reason": build_recommendation_reason(candidate, axis_hits, similar_books, life_connection, author_signal),
+                "recommendation_reason": build_recommendation_reason(candidate, axis_hits, similar_books, life_connection, discovery_signal),
                 "dna_connection": build_dna_connection(axis_hits, similar_books),
                 "life_book_connection": [book.get("title", "") for book in life_connection] or ["직접 연결 없음"],
                 "similar_high_books": [book.get("title", "") for book in similar_books[:5]],
@@ -170,11 +168,12 @@ def score_radar_candidates(candidates: list[dict[str, Any]], dna: dict[str, Any]
                 "taste_matches": [term for term, _weight in axis_hits],
                 "negative_matches": [term for term, _weight in trap_hits],
                 "subscores": {
-                    "author_signal": author_signal,
+                    "discovery_signal": discovery_signal,
+                    "known_author_penalty": known_author_penalty,
                     "positive_pattern_signal": positive_pattern_signal,
                     "high_similarity_bonus": high_similarity_bonus,
                     "life_book_bonus": direct_life_bonus,
-                    "availability_bonus": availability_bonus + millie_bonus,
+                    "availability_bonus": availability_bonus,
                     "negative_penalty": negative_penalty,
                     "evidence_count": evidence_count,
                 },
@@ -275,16 +274,13 @@ def term_hits(context: str, weighted: dict[str, int]) -> list[tuple[str, int]]:
 def similar_high_books(candidate: dict[str, Any], high_books: list[dict[str, Any]], limit: int = 5) -> list[dict[str, Any]]:
     context = normalize_text(candidate_context(candidate))
     title = normalize_text(candidate.get("title", ""))
-    author = primary_author_key(candidate.get("author", ""))
     matches = []
     for book in high_books:
         book_title = normalize_text(book.get("title", ""))
-        book_author = primary_author_key(book.get("author", ""))
         note_tokens = [normalize_text(token) for token in str(book.get("note", "")).replace(",", " ").split() if len(token) >= 2]
         shared_note_tokens = [token for token in note_tokens if len(token) >= 2 and token in context]
         title_related = len(book_title) >= 4 and (book_title in title or title in book_title)
-        author_related = author and author == book_author
-        if title_related or author_related or len(shared_note_tokens) >= 2:
+        if title_related or len(shared_note_tokens) >= 2:
             matches.append({**book, "shared_terms": shared_note_tokens[:5]})
     return sorted(matches, key=lambda item: (item.get("dna_weight", 0), len(item.get("shared_terms", []))), reverse=True)[:limit]
 
@@ -299,15 +295,11 @@ def cutoff_distance_label(candidate: dict[str, Any], cutoff_books: list[dict[str
 
 
 def is_available(candidate: dict[str, Any]) -> bool:
-    if candidate.get("source") == "millie" and candidate.get("availability") == "확인됨":
-        return True
     text = availability_summary(candidate)
     return any(token in text for token in ["대출가능", "가능", "확인됨", "available"])
 
 
 def availability_summary(candidate: dict[str, Any]) -> str:
-    if candidate.get("source") == "millie":
-        return candidate.get("availability") or "확인 필요"
     holdings = candidate.get("library_holdings", [])
     if not holdings:
         return candidate.get("availability") or "확인 필요"
@@ -321,17 +313,16 @@ def first_holding_url(candidate: dict[str, Any]) -> str:
     return ""
 
 
-def is_keyword_only(axis_hits: list[tuple[str, int]], similar_books: list[dict[str, Any]], author_signal: int, normalized_context: str) -> bool:
-    if similar_books or author_signal:
+def is_keyword_only(axis_hits: list[tuple[str, int]], similar_books: list[dict[str, Any]], normalized_context: str) -> bool:
+    if similar_books:
         return False
     hit_terms = {term for term, _weight in axis_hits}
     return bool(hit_terms) and hit_terms.issubset(GENERIC_KEYWORDS)
 
 
-def has_strong_basis(author_signal: int, positive_pattern_signal: int, high_similarity_bonus: int, direct_life_bonus: int) -> bool:
+def has_strong_basis(positive_pattern_signal: int, high_similarity_bonus: int, direct_life_bonus: int) -> bool:
     return (
-        author_signal > 0
-        or high_similarity_bonus >= 18
+        high_similarity_bonus >= 18
         or positive_pattern_signal >= 20
         or (direct_life_bonus > 0 and positive_pattern_signal >= 14)
     )
@@ -403,7 +394,7 @@ def build_recommendation_reason(
     axis_hits: list[tuple[str, int]],
     similar_books: list[dict[str, Any]],
     life_connection: list[dict[str, Any]],
-    author_signal: int,
+    discovery_signal: int,
 ) -> str:
     parts = []
     if life_connection:
@@ -413,8 +404,8 @@ def build_recommendation_reason(
         parts.append(f"4.0점 이상 포트폴리오의 {titles}와 주제/정서/메모 신호가 연결됩니다.")
     if axis_hits:
         parts.append("감지된 취향 축: " + ", ".join(term for term, _weight in axis_hits[:5]))
-    if author_signal:
-        parts.append("이미 고평점으로 검증된 작가 신호가 있습니다.")
+    if discovery_signal:
+        parts.append("읽은 기록이 없는 작가라 새 취향 탐색 후보입니다.")
     return " ".join(parts) if parts else "메타데이터만으로는 강한 추천 근거가 부족합니다."
 
 
@@ -425,8 +416,6 @@ def build_dna_connection(axis_hits: list[tuple[str, int]], similar_books: list[d
 
 
 def build_why_now(candidate: dict[str, Any]) -> str:
-    if candidate.get("source") == "millie" and candidate.get("availability") == "확인됨":
-        return "밀리의 서재에서 바로 확인 가능한 후보라 진입 비용이 낮습니다."
     if is_available(candidate):
         return "양평도서관에서 이용 가능한 상태라 30페이지 테스트를 바로 걸 수 있습니다."
     return "강한 취향 신호가 있어 추적 목록에 둘 만하지만, 이용 가능성과 근거 보강이 필요합니다."

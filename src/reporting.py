@@ -9,7 +9,7 @@ def write_taste_profile_md(path: Path, profile: dict[str, Any]) -> None:
     summary = profile.get("summary", {})
     for key, value in summary.items():
         lines.append(f"- {key}: {value}")
-    lines.extend(["", "## 선호 작가"])
+    lines.extend(["", "## 이미 읽은 고평점 작가 참고"])
     for author, count in profile.get("favorite_authors", []):
         lines.append(f"- {author}: {count}")
     lines.extend(["", "## 주요 메모 키워드"])

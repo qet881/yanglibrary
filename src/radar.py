@@ -7,7 +7,6 @@ from typing import Any
 
 from .notify import is_email_enabled, is_telegram_enabled, send_email_report, send_telegram_report
 from .portfolio import build_taste_profile, normalize_portfolio
-from .providers.millie import collect_millie
 from .providers.yplib_api import collect_yplib_api
 from .providers.yplib_crawler import collect_yplib_crawler
 from .query_plan import build_query_plan
@@ -100,7 +99,6 @@ def run_radar(
         "run_id": run_id,
         "run_dir": str(run_dir),
         "yplib_candidate_count": len(provider_results.get("yplib", empty_provider()).candidates),
-        "millie_candidate_count": len(provider_results.get("millie", empty_provider()).candidates),
         "deduped_candidate_count": len(candidates),
         "alert_count": len(changes.get("alert_items", [])),
         "notify_policy": notify_policy,
@@ -127,16 +125,8 @@ def effective_radar_config(config: dict[str, Any]) -> dict[str, Any]:
         radar_config.setdefault("recommendation", {})["new_arrival_days"] = 0
     radar_config.setdefault("providers", {})
     radar_config["providers"].setdefault("yplib", {"enabled": True, "provider": "auto"})
-    radar_config["providers"].setdefault(
-        "millie",
-        {
-            "enabled": True,
-            "provider": "manual_or_public",
-            "manual_input_file": "data/millie_watchlist.csv",
-            "max_queries": 12,
-            "limit_per_query": 10,
-        },
-    )
+    radar_config["providers"].setdefault("millie", {"enabled": False})
+    radar_config["providers"]["millie"]["enabled"] = False
     radar_config.setdefault("notify", {}).setdefault("email", {"enabled": False, "subject_prefix": "[Book Radar]", "max_items": 5})
     radar_config.setdefault("notify", {}).setdefault("telegram", {"enabled": False, "subject_prefix": "[Book Radar]", "max_chars_per_message": 3500})
     return radar_config
@@ -156,7 +146,6 @@ def collect_providers(config: dict[str, Any], query_plan: dict[str, Any], portfo
             has_api_results = bool(api_result.candidates)
             has_hard_errors = bool(api_result.errors) and not has_api_results
             results["yplib"] = api_result if has_api_results or not has_hard_errors else collect_yplib_crawler(config, query_plan, portfolio)
-    results["millie"] = collect_millie(config, query_plan)
     return results
 
 
@@ -186,10 +175,6 @@ def merge_candidates(candidates: list[dict[str, Any]], portfolio: dict[str, Any]
         else:
             merged[key]["library_holdings"] = merge_holdings(merged[key].get("library_holdings", []), candidate.get("library_holdings", []))
             merged[key]["raw_queries"] = sorted(set(merged[key].get("raw_queries", []) + candidate.get("raw_queries", [])))
-            if candidate.get("source") == "millie":
-                merged[key]["source"] = "millie"
-                merged[key]["availability"] = candidate.get("availability", merged[key].get("availability", "확인 필요"))
-                merged[key]["source_url"] = candidate.get("source_url") or merged[key].get("source_url", "")
         source = candidate.get("source", "unknown")
         if source not in merged[key]["sources"]:
             merged[key]["sources"].append(source)
@@ -258,7 +243,6 @@ def compare_radar_state(
     changes = {
         "new_strong": [],
         "availability_changed": [],
-        "millie_available": [],
         "score_confidence_rise": [],
         "watchlist": [],
         "alert_items": [],
@@ -294,9 +278,6 @@ def compare_radar_state(
             if old_availability != availability and is_available_key(availability):
                 changes["availability_changed"].append(item)
                 alert_reasons.append("이용 가능 상태로 변경")
-            if item.get("source") == "millie" and availability == "확인됨" and old_availability != "확인됨":
-                changes["millie_available"].append(item)
-                alert_reasons.append("밀리의 서재 이용 가능 확인")
             if rose_above_threshold(item, previous, config):
                 changes["score_confidence_rise"].append(item)
                 alert_reasons.append("점수와 확신도 상승")
@@ -404,8 +385,6 @@ def build_state_item(item: dict[str, Any], previous: dict[str, Any] | None, avai
 
 
 def item_availability_key(item: dict[str, Any]) -> str:
-    if item.get("source") == "millie":
-        return item.get("availability") or "확인 필요"
     return item.get("availability_summary") or ""
 
 
@@ -449,7 +428,6 @@ def write_radar_report(
         "",
         f"- 실행 시간: {run_id}",
         f"- 양평도서관 후보 수: {len(provider_results.get('yplib', empty_provider()).candidates)}",
-        f"- 밀리의 서재 후보 수: {len(provider_results.get('millie', empty_provider()).candidates)}",
         f"- 중복 제거 후 후보 수: {len(candidates)}",
         f"- 알림 후보 수: {len(changes.get('alert_items', []))}",
         f"- 오늘 이메일 발송 여부: {'예' if email_sent else '아니오'}",
@@ -457,7 +435,7 @@ def write_radar_report(
     ]
     sections = [
         ("새로 감지된 강력 후보", changes.get("new_strong", [])),
-        ("대출 가능 또는 바로 읽기 가능으로 바뀐 후보", changes.get("availability_changed", []) + changes.get("millie_available", [])),
+        ("대출 가능으로 바뀐 후보", changes.get("availability_changed", [])),
         ("점수와 확신도가 상승한 후보", changes.get("score_confidence_rise", [])),
         ("계속 추적할 후보", changes.get("watchlist", [])),
     ]

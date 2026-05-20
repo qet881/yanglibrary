@@ -65,7 +65,7 @@ python -m src.main --config config/app.yaml --mode radar --snapshot tests/fixtur
 
 ## Provider 설정
 
-양평도서관은 기본값 `auto`를 사용합니다.
+양평도서관은 기본값 `auto`를 사용합니다. 추천 후보 수집은 양평도서관 provider만 사용합니다.
 
 ```yaml
 providers:
@@ -75,24 +75,6 @@ providers:
 ```
 
 현재 `/api/search` POST 방식은 JSON 응답과 `bookList`를 반환하는 것을 확인했습니다. `auto`는 API 결과가 없고 오류가 강하면 HTML crawler로 fallback합니다.
-
-밀리의 서재는 로그인 우회, DRM 우회, 본문 수집을 하지 않습니다. public 검색 화면이 호출하는 `https://live-api.millie.co.kr/v3/search/content`에서 로그인 없이 반환되는 도서 메타데이터와 `is_service`만 사용합니다.
-
-```yaml
-providers:
-  millie:
-    enabled: true
-    provider: "manual_or_public"
-    manual_input_file: "data/millie_watchlist.csv"
-    max_queries: 12
-    limit_per_query: 10
-```
-
-`data/millie_watchlist.csv` 형식:
-
-```csv
-title,author,availability,source_url,collected_at
-```
 
 ## Telegram 알림
 

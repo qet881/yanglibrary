@@ -4,9 +4,11 @@ from datetime import timedelta
 from pathlib import Path
 
 from src.portfolio import build_taste_profile, normalize_portfolio
-from src.radar import compare_radar_state, effective_radar_config, finalize_alert_state, merge_candidates, run_radar
+from src.query_plan import build_query_plan
+from src.radar import compare_radar_state, collect_providers, effective_radar_config, finalize_alert_state, merge_candidates, run_radar
 from src.radar_scoring import build_radar_taste_dna, score_radar_candidates
-from src.utils import now_kst, read_json
+from src.scoring import score_candidates
+from src.utils import now_kst, primary_author_key, read_json
 from src.notify import chunk_text, is_email_enabled, is_telegram_enabled
 from src.env import load_env_file
 
@@ -166,6 +168,60 @@ def test_radar_disables_freshness_filter(tmp_path: Path) -> None:
     config = effective_radar_config(base_config(tmp_path))
     assert config["recommendation"]["min_acquisition_year"] == 0
     assert config["recommendation"]["new_arrival_days"] == 0
+
+
+def test_radar_forces_yplib_only_even_if_millie_enabled(tmp_path: Path) -> None:
+    config = base_config(tmp_path)
+    config["providers"]["yplib"]["enabled"] = False
+    config["providers"]["millie"]["enabled"] = True
+    effective = effective_radar_config(config)
+    assert effective["providers"]["millie"]["enabled"] is False
+    assert "millie" not in collect_providers(effective, {"queries": []}, {})
+
+
+def test_query_plan_avoids_favorite_author_queries(tmp_path: Path) -> None:
+    config = effective_radar_config(base_config(tmp_path))
+    portfolio = sample_portfolio(config)
+    taste_profile = build_taste_profile(portfolio, 4.0)
+    plan = build_query_plan(portfolio, taste_profile, 30)
+    favorite_authors = {author for author, _count in taste_profile.get("favorite_authors", [])}
+    assert favorite_authors
+    assert not any(item["query"] in favorite_authors for item in plan["queries"])
+
+
+def test_unread_author_beats_read_author_with_same_taste_signal(tmp_path: Path) -> None:
+    config = effective_radar_config(base_config(tmp_path))
+    config["recommendation"]["min_score"] = 0
+    config["recommendation"]["preferred_libraries"] = ["lib"]
+    portfolio = sample_portfolio(config)
+    taste_profile = build_taste_profile(portfolio, 4.0)
+    keyword = taste_profile["note_keywords"][0][0]
+    read_author = portfolio["read_books"][0]["author"]
+    base = {
+        "title": "taste-match-candidate",
+        "class_description": keyword,
+        "library_holdings": [{"library": "lib", "availability": "available"}],
+        "portfolio_status": "new",
+    }
+    unread = {**base, "author": "newwriter", "author_key": primary_author_key("newwriter")}
+    already_read = {**base, "author": read_author, "author_key": primary_author_key(read_author)}
+
+    scored = score_candidates([already_read, unread], taste_profile, config)
+    assert scored[0]["author"] == "newwriter"
+    assert scored[0]["score"] > scored[1]["score"]
+
+    dna = build_radar_taste_dna(portfolio, taste_profile)
+    radar_scored = score_radar_candidates(
+        [
+            {**unread, "identity_key": "unread|new", "source": "yplib", "source_label": "yplib"},
+            {**already_read, "identity_key": "read|old", "source": "yplib", "source_label": "yplib"},
+        ],
+        dna,
+        config,
+    )
+    assert radar_scored[0]["author"] == "newwriter"
+    assert radar_scored[0]["subscores"]["discovery_signal"] > 0
+    assert radar_scored[1]["subscores"]["known_author_penalty"] > 0
 
 
 def test_keyword_only_candidate_is_not_alert(tmp_path: Path) -> None:

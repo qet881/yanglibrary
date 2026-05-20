@@ -125,6 +125,7 @@ def build_taste_profile(portfolio: dict[str, Any], high_rating_threshold: float)
     high_books = [b for b in read_books if b.get("rating", 0) >= high_rating_threshold]
     low_books = [b for b in read_books if b.get("rating", 0) and b.get("rating", 0) < high_rating_threshold]
     author_counter = Counter(b.get("author", "") for b in high_books if b.get("author"))
+    read_author_keys = sorted({identity_key("", b.get("author", "")).split("|", 1)[1] for b in read_books if b.get("author")})
     note_words = Counter()
     for book in high_books + portfolio.get("wishlist_books", []):
         for word in extract_keywords(book.get("note", "")):
@@ -140,6 +141,7 @@ def build_taste_profile(portfolio: dict[str, Any], high_rating_threshold: float)
         "high_rating_books": high_books[:30],
         "low_rating_books": low_books[:20],
         "favorite_authors": author_counter.most_common(15),
+        "read_author_keys": read_author_keys,
         "note_keywords": note_words.most_common(30),
         "recent_interest_books": portfolio.get("reading_books", [])[:20] + portfolio.get("wishlist_books", [])[:20],
     }

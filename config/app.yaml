@@ -69,15 +69,6 @@ providers:
   yplib:
     enabled: true
     provider: "auto"  # auto | api | crawler
-  millie:
-    enabled: true
-    provider: "manual_or_public"
-    manual_input_file: "data/millie_watchlist.csv"
-    public_search_url: "https://live-api.millie.co.kr/v3/search/content"
-    referer_base: "https://www.millie.co.kr/v4/library/search"
-    max_queries: 12
-    limit_per_query: 10
-    request_delay_seconds: 1.0
 
 notify:
   email:
